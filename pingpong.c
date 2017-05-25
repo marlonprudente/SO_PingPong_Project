@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ucontext.h>
+//p005=======================================================
+#include <signal.h>
+#include <sys/time.h>
+//===========================================================
+//#define DEBUG
 
 #define STACKSIZE 32768		/* tamanho de pilha das threads */
 #define ALPHA -1            /* taxa de envelhecimento de tarefas */
@@ -10,6 +15,10 @@
 #define STANDARD_PRIO 0          /* valor padrão de prioridade ao criar uma tarefa */
 #define PRIO_MAX -20        /* valor da prioridade máxima para tarefas */
 #define PRIO_MIN 20         /* valor da prioridade mínima para tarefas */
+//p05=======================================================
+#define TICK_SEG       0           /* segundos que compoem um tick (somando com TICK_MICROS)*/
+#define TICK_MSEG     1000        /* microssegundos que compoem um tick (somando com TICK_SECS)- 1 milissegundo neste caso*/
+#define QUANTUM         20          /* ticks que compõem um quantum*/
 
 ///Variáveis globais    ========================================================
 task_t tarefa_principal, dispatcher, *tarefa_atual = NULL, *fila_tprontas = NULL;     //Tarefa em execução
@@ -18,6 +27,15 @@ task_t tarefa_principal, dispatcher, *tarefa_atual = NULL, *fila_tprontas = NULL
 
 int userTasks = 0;      //Contador de tarefas de usuário ativas
 int id_count = 0;       //Contador de IDs
+//p05======================================================================
+int quantum_count = 0; //Contador de ticks para chegar a um quantum
+
+// estrutura que define um tratador de sinal (deve ser global ou static)
+struct sigaction action ;
+
+// estrutura de inicialização to timer
+struct itimerval timer;
+
 
 ///Funções P03 ============================================================
 //Inicializa variáveis da tarefa principal
@@ -51,18 +69,25 @@ void task_alpha_dinamic_prio(task_t* task, int alpha);
 //Compara as prioridade de duas tarefas
 int task_compare(task_t *task1, task_t *task2);
 
+
+///Funções P05 ============================================================
+//inicializa o temporizador do sistema
+void init_timer_system();
+//execuçao de uma interrupcao pelo temporizador (a cada tick)
+void timer_tick();
 //Ordena uma lista de tarefas
-void counting_sort(task_t** task_q, int task_comp(task_t*,task_t*));
-
-
+task_t* prioridade_max(task_t **task_q, int task_comp(task_t*,task_t*));
 
 // funções gerais ==============================================================
 // Inicializa o sistema operacional; deve ser chamada no inicio do main()
 void pingpong_init (){
     //desativa o buffer de saida padrao (stdout), usado pela função printf
     setvbuf(stdout, 0, _IONBF, 0);
+
     init_tarefa_principal();           //Inicializa tarefa principal (atual)
     task_create(&dispatcher, dispatcher_body, "dispatcher :");   //Inicializa despachante de tarefas
+    dispatcher.task_dono = SISTEMA;
+    init_timer_system();
 }
 
 // gerência de tarefas =========================================================
@@ -94,6 +119,7 @@ int task_create (task_t *task, void (*start_func)(void *), void *arg){
         task->prio_dinam = STANDARD_PRIO;
         task->id = id_count++;         //Novo ID
         task->parent = tarefa_atual;    //Tarefa corrente é a criadora desta tarefa
+        task->task_dono = USUARIO;
 
         task_setprio(task, STANDARD_PRIO);    //Prioridade default
     	task_set_dinamic_prio(task, task_getprio(task));
@@ -145,11 +171,18 @@ void task_exit (int exitCode){
     }
     else{
         tarefa_atual = &dispatcher;     //... caso uma tarefa de usuário tente sair, o despachante será o próximo a executar
+        userTasks--;
     }
 
-    userTasks--;                        //Menos uma tarefa em operação
+    
     last_task->status = FINALIZADO;       //Tarefa atual será finalizada
-    tarefa_atual->status = EXECUTANDO;   //Próxima tarefa entrará em execução
+
+    if(tarefa_atual->id > 1){
+        task_set_executing(tarefa_atual);
+    }else{
+        tarefa_atual->status = EXECUTANDO;   //Próxima tarefa entrará em execução
+    }
+    
 
     #ifdef DEBUG
     printf("task_exit: tarefa %d sendo encerrado com codigo %d\n", last_task->id, exitCode);
@@ -169,6 +202,24 @@ int task_switch (task_t *task){
 
     task_t *last_task = tarefa_atual;   //Última tarefa executada
     tarefa_atual = task;                //Troca da tarefa antiga para a atual
+
+    if(last_task->id > 1) //Caso seje uma tarefa de usuário...
+    {
+        task_set_ready(last_task); //Insere a tarefa corrente na fila de prontas, mudando seu estado para PRONTO, ...
+    }
+    else{
+        last_task->status = PRONTO;   //Caso contrário, apenas muda seu estado para PRONTO
+    }
+
+    if(tarefa_atual->id > 1) //Caso seje uma tarefa de usuário...
+    {
+        task_set_executing(task); //Insere a tarefa corrente na fila de prontas, mudando seu estado para PRONTO, ...
+    }
+    else{
+        tarefa_atual->status = EXECUTANDO;   //Caso contrário, apenas muda seu estado para PRONTO
+    }
+
+    quantum_count = QUANTUM;
 
     #ifdef DEBUG
     printf("task_switch: trocando contexto %d -> %d\n", last_task->id, tarefa_atual->id);
@@ -240,7 +291,7 @@ void task_yield (){
     printf("task_yield: liberando-se da tarefa %d\n", tarefa_atual->id);
     #endif  //DEBUG
 
-    //Tarefa de usuário é sempre maior que 1
+    /*Tarefa de usuário é sempre maior que 1
     if(tarefa_atual->id > 1) { //Caso seje uma tarefa de usuário...
    
         if(task_set_ready(tarefa_atual)){ //Insere a tarefa corrente na fila de prontas, mudando seu estado para PRONTO, ...        
@@ -253,7 +304,7 @@ void task_yield (){
     else{
              tarefa_atual->status = PRONTO;   //Caso contrário, apenas muda seu estado para PRONTO
     }  
-
+*/
     //Retorna para o despachante
     task_switch(&dispatcher);
 }
@@ -274,6 +325,7 @@ void dispatcher_body(void *arg){
     while(userTasks > 0) {           //Enquanto houver tarefas de usuários
     
         task_t* next = scheduler(); //Próxima tarefa dada pelo escalonador
+
         if(next){
             
             #ifdef DEBUG
@@ -288,9 +340,9 @@ void dispatcher_body(void *arg){
                 perror(error);
                 exit(-1);
             }
-            dispatcher.status = PRONTO;      //Preparando despachante para troca de tarefa
+            //dispatcher.status = PRONTO;      //Preparando despachante para troca de tarefa
             task_switch(next);              //Executa a próxima tarefa
-            dispatcher.status = EXECUTANDO;  //Ao voltar da última tarefa, despachante entra em execução
+           // dispatcher.status = EXECUTANDO;  //Ao voltar da última tarefa, despachante entra em execução
         }
         else if (!fila_tprontas){
             break;
@@ -308,13 +360,12 @@ task_t *scheduler(){
         return NULL;
     }
 
-    counting_sort(&fila_tprontas, task_compare);
+    
     
     //FCFS- ṕrimeiro elemento da fila será o próximo a executar
-    task_t * next = fila_tprontas;
+    task_t *next = prioridade_max(&fila_tprontas, task_compare);
 
     task_get_old(next);
-
 	task_set_dinamic_prio(next, task_getprio(next));
     //Prepara a próxima tarefa para a próxima execução
     //fila_tprontas = fila_tprontas->next;
@@ -333,11 +384,17 @@ void init_tarefa_principal(){
     tarefa_principal.id = id_count++;     //ID da tarefa principal
     tarefa_principal.parent = NULL;        //A primeira tarefa não possui pai,...
     tarefa_principal.status = EXECUTANDO;   //... já está em execução quando foi criada ...
+    tarefa_principal.task_dono = SISTEMA; //Tarefa do sistema
 
     task_setprio(&tarefa_principal, STANDARD_PRIO);    //Prioridade default
     task_set_dinamic_prio(&tarefa_principal, task_getprio(&tarefa_principal));
 
     tarefa_atual = &tarefa_principal;      //... e é a tarefa em execução no momento.
+
+    #ifdef DEBUG
+    printf("init_main_task: tarefa principal iniciada com id %d", tarefa_principal.id);
+    #endif  //DEBUG
+
 }
 
 //Função interna para ajudar a mudar o estado de uma tarefa e inseri-la na fila de prontas
@@ -476,15 +533,15 @@ void task_alpha_dinamic_prio(task_t* task, int alpha)
     if(!task){                   //Para uma tarefa nula, será alterado a tarefa em execução
         task = tarefa_atual;
         	}
-    int NOVO_prio_dinam = task->prio_dinam + alpha;
-    if(NOVO_prio_dinam > PRIO_MIN){               //Prioridade mínima é 20
+    int novo_prio_dinam = task->prio_dinam + alpha;
+    if(novo_prio_dinam > PRIO_MIN){               //Prioridade mínima é 20
         task->prio_dinam = PRIO_MIN;
     }
-    else if(NOVO_prio_dinam < PRIO_MAX){              //Prioridade máxima é -20
+    else if(novo_prio_dinam < PRIO_MAX){              //Prioridade máxima é -20
         task->prio_dinam = PRIO_MAX;
     }
     else{
-        task->prio_dinam = NOVO_prio_dinam;
+        task->prio_dinam = novo_prio_dinam;
     }
 
     #ifdef DEBUG
@@ -497,40 +554,43 @@ void task_alpha_dinamic_prio(task_t* task, int alpha)
 //e zero se task1 e task2 são iguais
 int task_compare(task_t *task1, task_t *task2)
 {
-    return task_get_dinamic_prio(task1) - task_get_dinamic_prio(task2);
+    return task_get_dinamic_prio(task2) - task_get_dinamic_prio(task1);
 }
 
 //Ordenação por counting sort da prioridade dinâmica
-void counting_sort(task_t** task_q, int task_comp(task_t*,task_t*))
-{
+task_t* prioridade_max(task_t** task_q, int task_comp(task_t*,task_t*)){
     //Verificação da fila, se a mesma foi iniciada
     if(!task_q){
-        return;
+        return NULL;
     }
 
     //Verificação da fila, se a mesma não está vazia
     if(!*task_q){
-        return;
+        return NULL;
     }
 
     //Inicio counting sort (vetor da frequência de prioridade)
     //Obs.: por poder existir prioridades negativas, os índices devem ser normalizados para PRIO_MAX = 0 (ou prio - PRIO_MAX)
-    int alcance = PRIO_MIN-PRIO_MAX;
+    /*int alcance = PRIO_MIN-PRIO_MAX;
 
     int aux_v[alcance];
 
     for(int i = 0; i < alcance; i++){
         aux_v[i] = 0;
     }
-
+*/
     task_t *first = *task_q;
+    task_t *max_prio = first;
 
-    aux_v[task_get_dinamic_prio(first)-PRIO_MAX]++;
+    //aux_v[task_get_dinamic_prio(first)-PRIO_MAX]++;
 
     for(task_t *it = first->next; it != first; it = it->next){
-        aux_v[task_get_dinamic_prio(it)-PRIO_MAX]++;
+        //aux_v[task_get_dinamic_prio(it)-PRIO_MAX]++;
+        if(task_comp(max_prio, it) < 0){
+            max_prio = it;
+        }
     }
-
+/*
     int sum = 0;
 
     for(int i = 0; i < alcance; i++){
@@ -575,4 +635,53 @@ void counting_sort(task_t** task_q, int task_comp(task_t*,task_t*))
     *task_q = *srt_v;
 
     free(srt_v);
+*/
+    return max_prio;
+}
+
+//p05===============================================================
+//Inicializa o temporizador do sistema
+void init_timer_system(){
+    //Definiçoes do signal da interrupcao
+    action.sa_handler = timer_tick;             //funcao callback do signal trata manipulacao de ticks
+    sigemptyset (&action.sa_mask);
+    action.sa_flags = 0 ;
+
+    if (sigaction (SIGALRM, &action, 0) < 0)    //Definicao do signal como SIGALRM gera uma interrupcao pelo temporizador
+    {
+        perror ("Erro em sigaction: ") ;
+        exit (1) ;
+    }
+
+    timer.it_value.tv_usec = TICK_MSEG;      // primeiro disparo, em micro-segundos
+    timer.it_value.tv_sec  = TICK_SEG;      // primeiro disparo, em segundos
+    timer.it_interval.tv_usec = TICK_MSEG;   // disparos subsequentes, em micro-segundos
+    timer.it_interval.tv_sec  = TICK_SEG;   // disparos subsequentes, em segundos
+
+    if (setitimer (ITIMER_REAL, &timer, 0) < 0) //temprizador pelo tempo real
+    {
+        perror ("Erro em setitimer: ") ;
+        exit (1) ;
+    }
+    #ifdef DEBUG
+    printf("init_timer: temporizador iniciado com %d segundos mais %d microssegundos\n", TICK_SEG, TICK_MSEG);
+    #endif  //DEBUG
+}
+
+// tratador do signal, manipula interupção a cada tick
+void timer_tick(int signum){
+
+    #ifdef DEBUG
+    printf("timer_tick: alarme %d tick %d de %d da tarefa %d\n", signum, quantum_count, QUANTUM, tarefa_atual->id);
+    #endif  //DEBUG
+    if(tarefa_atual->task_dono == USUARIO){
+        quantum_count--;
+        if(quantum_count == 0){
+            #ifdef DEBUG
+            printf("timer_tick: fim do quantum de %d, trocando para dispatcher\n", tarefa_atual->id);
+            printf("Tamanho do Quantum %d \n", quantum_count);
+            #endif  //DEBUG
+            task_switch(&dispatcher);
+        }
+    }
 }

@@ -13,6 +13,10 @@
 //Estado de uma tarefa (conforme diagrama de estados): Nova, Pronta, Suspensa e Terminada.
 enum status_t{NOVO, PRONTO, EXECUTANDO, SUSPENSO, FINALIZADO};
 
+//Estrutura com a informação do dono da tarefa, se é do usuário ou do sistema, para implementar o quantum
+typedef enum task_dono{ USUARIO, SISTEMA
+}task_dono_t;
+
 // Estrutura que define uma tarefa
 typedef struct task_t
 {
@@ -25,6 +29,9 @@ typedef struct task_t
     struct queue_t **fila_atual;
     int prio_estat;
     int prio_dinam;
+
+    task_dono_t task_dono; //De quem é a tarefa, do Usuário ou do sistema, para controle do quantum
+
 } task_t ;
 
 // estrutura que define um semáforo
