@@ -4,9 +4,11 @@
  * Desenvolvido através do Netbeans IDE.
  */
 
-#include "queue.h"
+
 #include <stdio.h>
 #include <stdlib.h>
+
+#include "queue.h"
 
 
 //------------------------------------------------------------------------------
@@ -37,15 +39,17 @@ void queue_append(queue_t **queue, queue_t *elem) {
         elem->next = elem;
         elem->prev = elem;
         return;
+    } else {
+        queue_t* primeiro = *queue;
+        queue_t* ultimo = (*queue)->prev;
+
+        primeiro->prev = elem; //o elemento passa a apontar para o inicio da fila
+        ultimo->next = elem; //o elemento passa a apontar para o antigo final da fila 
+
+        elem->next = primeiro;
+        elem->prev = ultimo;
+
     }
-    queue_t* primeiro = *queue;
-    queue_t* ultimo = (*queue)->prev;
-
-    primeiro->prev = elem; //o elemento passa a apontar para o inicio da fila
-    ultimo->next = elem; //o elemento passa a apontar para o antigo final da fila 
-    elem->next = primeiro;
-    elem->prev = ultimo;
-
 
 
 
@@ -62,8 +66,8 @@ void queue_append(queue_t **queue, queue_t *elem) {
 
 queue_t *queue_remove(queue_t **queue, queue_t *elem) {
 
-    queue_t* aux = *queue;
-    queue_t* fim = aux;
+
+
     queue_t* verso;
     queue_t* frente;
 
@@ -72,14 +76,18 @@ queue_t *queue_remove(queue_t **queue, queue_t *elem) {
         printf("Fila está vazia.\n");
         return NULL;
     }
-    if (!elem) {
-        printf("Inclusão de elemento vazio.\n");
-        return NULL;
-    }
     if (!*queue) {
         printf("Fila está nula.\n");
         return NULL;
     }
+    if (!elem) {
+        printf("Inclusão de elemento vazio.\n");
+        return NULL;
+    }
+
+
+    queue_t* aux = *queue;
+
     //Remover elementos
     if (aux == elem) {
 
@@ -101,6 +109,8 @@ queue_t *queue_remove(queue_t **queue, queue_t *elem) {
         return elem;
 
     }
+
+    queue_t* fim = aux;
 
     for (aux = aux->next; aux != fim; aux = aux->next) {
         if (aux == elem) {
@@ -128,8 +138,6 @@ queue_t *queue_remove(queue_t **queue, queue_t *elem) {
 
 int queue_size(queue_t *queue) {
 
-
-
     if (!queue) {
         return 0;
     }
@@ -141,8 +149,8 @@ int queue_size(queue_t *queue) {
     for (; aux != fim; aux = aux->next) {
         cont++;
     }
-    return cont;
 
+    return cont;
 };
 
 //------------------------------------------------------------------------------
