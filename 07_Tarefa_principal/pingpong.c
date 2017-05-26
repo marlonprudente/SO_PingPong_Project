@@ -12,12 +12,12 @@
 //DEBUG_OPERATIONAL_SYSTEM  > ativa mensagens do estado do sistema operacional
 //#define DEBUG_TASK_CREATE        // > ativa debugs para criacao de tarefa
 #define DEBUG_TASK_EXIT         //  > ativa debugs para finalizacao de tarefa
-//#define DEBUG_TASK_EXIT_STATUS   // > ativa mensagem de estado da tarefa em sua finalizacao
-//DEBUG_TASK_SWITCH         > ativa debug para troca de tarefas
+#define DEBUG_TASK_EXIT_STATUS   // > ativa mensagem de estado da tarefa em sua finalizacao
+//#define DEBUG_TASK_SWITCH         //> ativa debug para troca de tarefas
 //DEBUG_TASK_SUSPEND        > ativas debug para suspensao de tarefas
-//DEBUG_DISPATCHER          > habilita debug do dispatcher
+//#define DEBUG_DISPATCHER        //  > habilita debug do dispatcher
 //DEBUG_TASK_PRIORITIES     > habilita debug para prioridades de tarefas
-#define DEBUG_SYSTEM_TASK      //   > habilita mensagens para tarefas de sistema
+//#define DEBUG_SYSTEM_TASK      //   > habilita mensagens para tarefas de sistema
 //DEBUG_MINIMAL             > mostra principais mensagens de debug
 
 #define STACKSIZE 32768		/* tamanho de pilha das threads */
@@ -52,8 +52,17 @@ sys_clock_t sys_clock_ms = 0;   //tempo do sistema em ms
 
 
 ///Funções P03 ============================================================
+//inicializa o temporizador do sistema //p06
+void init_timer_system();
+
 //Inicializa variáveis da tarefa principal
 void init_tarefa_principal();
+
+//Funções p07=============================================================
+void init_dispatcher();
+
+//execuçao de uma interrupcao pelo temporizador (a cada tick)
+void timer_tick();
 
 //Função despachante de tarefas (corpo associada à tarefa despachante)
 void dispatcher_body(void *arg);
@@ -85,15 +94,12 @@ int task_compare(task_t *task1, task_t *task2);
 
 
 ///Funções P05 ============================================================
-//inicializa o temporizador do sistema
-void init_timer_system();
-//execuçao de uma interrupcao pelo temporizador (a cada tick)
-void timer_tick();
+
+
 //Ordena uma lista de tarefas
 task_t* prioridade_max(task_t **task_q, int task_comp(task_t*,task_t*));
 
-//Funções p07=============================================================
-void init_dispatcher();
+
 
 // funções gerais ==============================================================
 // Inicializa o sistema operacional; deve ser chamada no inicio do main()
@@ -108,7 +114,7 @@ void pingpong_init (){
 
 
     userTasks = 1;
-    id_count = 1;
+   id_count = 1;
 
 
     #if defined(DEBUG_ALL) || defined(DEBUG_OPERATIONAL_SYSTEM)
@@ -168,6 +174,7 @@ int task_create (task_t *task, void (*start_func)(void *), void *arg){
     if(task->task_dono == USUARIO){
 
         userTasks++;                //Nova tarefa de usuário criada
+
         if(task_set_ready(task)){    //Tenta mudar seu estado para PRONTO e inserir na fila de prontos
         
             char error[32];
@@ -272,6 +279,7 @@ int task_switch (task_t *task){
 
     //Troca o contexto entre as tarefas passadas como parâmetro
     swapcontext(&last_task->context, &tarefa_atual->context);
+
     return 0;
 }
 
@@ -355,12 +363,12 @@ void task_yield (){
 }
 
 //Mostra o ID de uma tarefa na tela (para debug)
-#ifdef DEBUG
+#if defined(DEBUG_ALL) || defined(DEBUG_DISPATCHER) || defined(DEBUG_OPERATIONAL_SISTEM)
     void task_print(void* task_v){
         task_t *task = (task_t *) task_v;
         printf("<%d>", task->id);
     }
-#endif //DEBUG
+#endif //defined(DEBUG_ALL)
 
 //Corpo de função da tarefa despachante
 void dispatcher_body(void *arg){
@@ -437,7 +445,7 @@ void init_tarefa_principal(){
     tarefa_principal.id = id_count++;     //ID da tarefa principal
     tarefa_principal.parent = NULL;        //A primeira tarefa não possui pai,...
     tarefa_principal.status = EXECUTANDO;   //... já está em execução quando foi criada ...
-    tarefa_principal.task_dono = SISTEMA; //Tarefa do sistema
+    tarefa_principal.task_dono = USUARIO; //Tarefa do sistema
     //p06====
     tarefa_principal.t_inicio = 0;
     tarefa_principal.t_executado = 0;
@@ -744,8 +752,8 @@ void timer_tick(int signum){
     #endif  //defined(DEBUG_ALL)
         
     if(tarefa_atual->task_dono == USUARIO){
-    quantum_count--;
-        if(quantum_count == 0){
+    
+        if(!quantum_count--){
             #ifdef DEBUG
             printf("timer_tick: fim do quantum de %d, trocando para dispatcher\n", tarefa_atual->id);
            // printf("Tamanho do Quantum %d \n", quantum_count);
@@ -756,6 +764,6 @@ void timer_tick(int signum){
 }
 //p06=========================================================================
 // retorna o relógio atual (em milisegundos)
- sys_clock_t systime (){
+ sys_clock_t systime(){
     return sys_clock_ms;
 }
